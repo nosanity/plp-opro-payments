@@ -11,6 +11,7 @@ from django.core.urlresolvers import reverse
 from payments.models import YandexPayment
 from plp.models import CourseSession
 from plp.notifications.base import get_host_url
+from plp_edmodule.models import EducationalModule
 from .models import UpsaleLink, ObjectEnrollment
 from .utils import payment_for_user, client
 
@@ -18,10 +19,17 @@ from .utils import payment_for_user, client
 @login_required
 def op_payment_view(request):
     session_id = request.GET.get('course_session_id', '')
-    if not session_id.isdigit():
+    module_id = request.GET.get('edmodule_id', '')
+    if bool(session_id) == bool(module_id):
+        # ожидаем или course_session_id или module_id
         raise Http404
-    session = get_object_or_404(CourseSession, id=session_id)
-    verified_enrollment = session.get_verified_mode_enrollment_type()
+    if (session_id and not session_id.isdigit()) or (module_id and not module_id.isdigit()):
+        raise Http404
+
+    obj_model = CourseSession if session_id else EducationalModule
+    obj_id = session_id or module_id
+    obj = get_object_or_404(obj_model, id=obj_id)
+    verified_enrollment = obj.get_verified_mode_enrollment_type()
     if not verified_enrollment:
         raise Http404
     upsale_link_ids = [i for i in request.GET.getlist('upsale_link_ids') if i.isdigit()]
@@ -29,32 +37,44 @@ def op_payment_view(request):
     upsales = []
     for upsale in upsale_links:
         s = upsale.content_object
-        if s and isinstance(s, CourseSession) and s.id == session.id:
+        if s and isinstance(s, obj_model) and s.id == obj.id:
             upsales.append(upsale)
-    session_price = verified_enrollment.price
-    total_price = session_price + sum([i.get_payment_price() for i in upsales])
+    if session_id:
+        obj_price = verified_enrollment.price
+    else:
+        obj_price = obj.get_price_list()['whole_price']
+    total_price = obj_price + sum([i.get_payment_price() for i in upsales])
 
     if request.method == 'POST' and request.is_ajax():
         # действительно создаем платеж только перед отправкой
-        payment_for_user(request.user, verified_enrollment, upsales, total_price)
+        if session_id:
+            payment_for_user(request.user, verified_enrollment, upsales, total_price)
+        else:
+            # TODO
+            pass
         return JsonResponse({'status': 0})
 
-    payment = payment_for_user(request.user, verified_enrollment, upsales, total_price, create=False)
+    if session_id:
+        payment = payment_for_user(request.user, verified_enrollment, upsales, total_price, create=False)
+    else:
+        # TODO
+        pass
     host_url = get_host_url(request)
     payment_fail = host_url + reverse('op_payment_status', kwargs={
         'status': 'fail',
-        'session_id': session.id,
+        'obj_id': obj.id,
         'user_id': request.user.id,
+        'payment_type': 'session' if session_id else 'edmodule',
     })
     payment_success = host_url + reverse('op_payment_status', kwargs={
         'status': 'success',
-        'session_id': session.id,
+        'obj_id': obj.id,
         'user_id': request.user.id,
+        'payment_type': 'session' if session_id else 'edmodule',
     })
 
     context = {
         'upsale_links': upsales,
-        'session': session,
         'total_price': total_price,
         'fields': {
             "shopId": settings.YANDEX_MONEY_SHOP_ID,
@@ -69,19 +89,24 @@ def op_payment_view(request):
         },
         'shop_url': settings.YANDEX_MONEY_SHOP_URL,
     }
+    if session_id:
+        context['session'] = obj
+    else:
+        context['module'] = obj
     return render(request, 'opro_payments/op_payment.html', context)
 
 
 @csrf_exempt
 @login_required
-def op_payment_status(request, session_id, user_id, status):
+def op_payment_status(request, payment_type, obj_id, user_id, status):
+    # TODO: payment_type == edmodule
     # не показываем чужие промокоды
     if str(request.user.id) != user_id:
         raise Http404
 
     template_path = "profile/payment_{}.html".format(status)
 
-    session = get_object_or_404(CourseSession, id=session_id)
+    session = get_object_or_404(CourseSession, id=obj_id)
     user = request.user
 
     context = {
