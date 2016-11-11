@@ -96,7 +96,8 @@ class UpsaleLink(models.Model):
             (free, 'Free'),
             (paid, 'Paid'),
         )
-    limit_models = models.Q(app_label='plp', model='coursesession')
+    limit_models = models.Q(app_label='plp', model='coursesession') | \
+                   models.Q(app_label='plp_edmodule', model='EducationalModule')
 
     upsale = models.ForeignKey('Upsale', verbose_name=_(u'Апсейл'), related_name='upsale_links')
     content_type = models.ForeignKey(ContentType, limit_choices_to=limit_models,

@@ -3,6 +3,7 @@
 from django.contrib.contenttypes.models import ContentType
 import autocomplete_light
 from plp.models import CourseSession
+from plp_edmodule.models import EducationalModule
 from .models import Upsale
 
 
@@ -20,9 +21,11 @@ class UpsaleLinkMultisearch(autocomplete_light.AutocompleteGenericBase):
     """
     choices = [
         CourseSession.objects.all(),
+        EducationalModule.objects.all()
     ]
     search_fields = [
         ('slug', 'course__title'),
+        ('code', 'title'),
     ]
 
     def choices_for_request(self):

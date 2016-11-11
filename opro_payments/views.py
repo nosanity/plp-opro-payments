@@ -42,7 +42,7 @@ def op_payment_view(request):
     if session_id:
         obj_price = verified_enrollment.price
     else:
-        obj_price = obj.get_price_list()['whole_price']
+        obj_price = obj.get_price_list(request.user)['whole_price']
     total_price = obj_price + sum([i.get_payment_price() for i in upsales])
 
     if request.method == 'POST' and request.is_ajax():
