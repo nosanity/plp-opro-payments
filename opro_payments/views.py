@@ -5,7 +5,7 @@ import logging
 from django.conf import settings
 from django.shortcuts import get_object_or_404, render
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, JsonResponse
+from django.http import Http404, JsonResponse, HttpResponseServerError
 from django.views.decorators.csrf import csrf_exempt
 from django.core.urlresolvers import reverse
 from payments.models import YandexPayment
@@ -20,6 +20,7 @@ from .utils import payment_for_user, client
 def op_payment_view(request):
     session_id = request.GET.get('course_session_id', '')
     module_id = request.GET.get('edmodule_id', '')
+    only_first_course = bool(request.GET.get('only_first_course', False))
     if bool(session_id) == bool(module_id):
         # ожидаем или course_session_id или module_id
         raise Http404
@@ -39,26 +40,31 @@ def op_payment_view(request):
         s = upsale.content_object
         if s and isinstance(s, obj_model) and s.id == obj.id:
             upsales.append(upsale)
+
+    first_session_id = None
     if session_id:
         obj_price = verified_enrollment.price
     else:
-        obj_price = obj.get_price_list(request.user)['whole_price']
+        if only_first_course:
+            try:
+                session, price = obj.get_first_session_to_buy(request.user)
+            except TypeError:
+                return HttpResponseServerError()
+            obj_price = price
+            first_session_id = session.id
+        else:
+            obj_price = obj.get_price_list(request.user)['whole_price']
     total_price = obj_price + sum([i.get_payment_price() for i in upsales])
 
     if request.method == 'POST' and request.is_ajax():
         # действительно создаем платеж только перед отправкой
-        if session_id:
-            payment_for_user(request.user, verified_enrollment, upsales, total_price)
-        else:
-            # TODO
-            pass
+        if total_price:
+            payment_for_user(request.user, verified_enrollment, upsales, total_price,
+                             only_first_course=only_first_course, first_session_id=first_session_id)
         return JsonResponse({'status': 0})
 
-    if session_id:
-        payment = payment_for_user(request.user, verified_enrollment, upsales, total_price, create=False)
-    else:
-        # TODO
-        pass
+    payment = payment_for_user(request.user, verified_enrollment, upsales, total_price, create=False,
+                               only_first_course=only_first_course, first_session_id=first_session_id)
     host_url = get_host_url(request)
     payment_fail = host_url + reverse('op_payment_status', kwargs={
         'status': 'fail',

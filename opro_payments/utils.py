@@ -9,7 +9,7 @@ from raven import Client
 from payments.helpers import payment_for_participant_complete
 from payments.models import YandexPayment
 from payments.sources.yandex_money.signals import payment_completed
-from plp.models import Participant, EnrollmentReason, SessionEnrollmentType, User
+from plp.models import Participant, EnrollmentReason, SessionEnrollmentType, User, CourseSession
 from plp.utils.edx_enrollment import EDXEnrollmentError
 from plp_edmodule.models import EducationalModuleEnrollmentType, EducationalModuleEnrollment, \
     EducationalModuleEnrollmentReason
@@ -22,8 +22,11 @@ if RAVEN_CONFIG:
     client = Client(RAVEN_CONFIG.get('dsn'))
 
 
-def payment_for_user(user, enrollment_type, upsale_links, price, create=True, only_first_course=False):
+def payment_for_user(user, enrollment_type, upsale_links, price, create=True, only_first_course=False,
+                     first_session_id=None):
     assert enrollment_type.active == True
+    if only_first_course:
+        assert first_session_id is not None
     # Яндекс-Касса не даст провести оплату два раза по одному и тому же order_number
     upsales = '-'.join([str(i.id) for i in upsale_links])
     if isinstance(enrollment_type, SessionEnrollmentType):
@@ -53,6 +56,8 @@ def payment_for_user(user, enrollment_type, upsale_links, price, create=True, on
             'mode': enrollment_type.mode,
             'only_first_course': only_first_course
         }
+        if only_first_course:
+            metadata['edmodule']['first_session_id'] = first_session_id
 
     try:
         payment = YandexPayment.objects.get(order_number=order_number)
@@ -176,7 +181,7 @@ def _payment_for_module_complete(payment, metadata, user, edmodule, upsale_links
     )
 
     if edmodule['only_first_course']:
-        course, session = module.get_closest_course_with_session()
+        session = CourseSession.objects.get(id=edmodule['first_session_id'])
         participant, created = Participant.objects.get_or_create(session=session, user=user)
         session_enr_type = SessionEnrollmentType.objects.get(session=session, mode='verified')
         params = dict(
