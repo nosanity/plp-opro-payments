@@ -25,8 +25,6 @@ if RAVEN_CONFIG:
 def payment_for_user(user, enrollment_type, upsale_links, price, create=True, only_first_course=False,
                      first_session_id=None):
     assert enrollment_type.active == True
-    if only_first_course:
-        assert first_session_id is not None
     # Яндекс-Касса не даст провести оплату два раза по одному и тому же order_number
     upsales = '-'.join([str(i.id) for i in upsale_links])
     if isinstance(enrollment_type, SessionEnrollmentType):
@@ -114,8 +112,9 @@ def _payment_for_session_complete(payment, metadata, user, new_mode, upsale_link
     participant, created = Participant.objects.get_or_create(session=session, user=user)
 
     upsales = UpsaleLink.objects.filter(id__in=upsale_links)
+    promocodes = []
     for u in upsales:
-        ObjectEnrollment.objects.update_or_create(
+        obj, created = ObjectEnrollment.objects.update_or_create(
             user=user,
             upsale=u,
             defaults={
@@ -125,6 +124,11 @@ def _payment_for_session_complete(payment, metadata, user, new_mode, upsale_link
                 'is_active': True,
             }
         )
+        if created:
+            data = obj.jsonfield or {}
+            promo = data.get('promo_code')
+            if promo:
+                promocodes.append((u.upsale.title, promo))
 
     params = dict(
         participant=participant,
@@ -134,7 +138,12 @@ def _payment_for_session_complete(payment, metadata, user, new_mode, upsale_link
     )
     if not EnrollmentReason.objects.filter(**params).exists():
         try:
-            EnrollmentReason.objects.create(**params)
+            paid_for_session = EnrollmentReason.objects.filter(
+                participant=participant,
+                session_enrollment_type__mode='verified'
+            ).exists()
+            reason = EnrollmentReason.objects.create(**params)
+            reason.send_confirmation_email(upsales=upsales, promocodes=promocodes, paid_for_session=paid_for_session)
             Participant.objects.filter(id=participant.id).update(sent_to_edx=timezone.now())
         except EDXEnrollmentError as e:
             logging.error('Failed to push verified enrollment %s to edx for user %s: %s' % (
@@ -180,19 +189,21 @@ def _payment_for_module_complete(payment, metadata, user, edmodule, upsale_links
         full_paid=not edmodule['only_first_course']
     )
 
-    if edmodule['only_first_course']:
+    if edmodule['only_first_course'] and edmodule.get('first_session_id'):
         session = CourseSession.objects.get(id=edmodule['first_session_id'])
         participant, created = Participant.objects.get_or_create(session=session, user=user)
         session_enr_type = SessionEnrollmentType.objects.get(session=session, mode='verified')
         params = dict(
             participant=participant,
             session_enrollment_type=session_enr_type,
-            payment_type=EnrollmentReason.PAYMENT_TYPE.OTHER,
+            payment_type=EnrollmentReason.PAYMENT_TYPE.YAMONEY,
+            payment_order_id=payment.order_number,
         )
         if not EnrollmentReason.objects.filter(**params).exists():
             try:
-                EnrollmentReason.objects.create(**params)
+                reason = EnrollmentReason.objects.create(**params)
                 Participant.objects.filter(id=participant.id).update(sent_to_edx=timezone.now())
+                reason.send_confirmation_email()
             except EDXEnrollmentError as e:
                 logging.error('Failed to push verified enrollment %s to edx for user %s: %s' % (
                     session, user, e
