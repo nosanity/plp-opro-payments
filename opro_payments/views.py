@@ -5,7 +5,7 @@ import logging
 from django.conf import settings
 from django.shortcuts import get_object_or_404, render
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, JsonResponse, HttpResponseServerError
+from django.http import Http404, JsonResponse, HttpResponseServerError, HttpResponseRedirect
 from django.views.decorators.csrf import csrf_exempt
 from django.core.urlresolvers import reverse
 from payments.models import YandexPayment
@@ -59,22 +59,30 @@ def op_payment_view(request):
         if only_first_course:
             try:
                 session, price = obj.get_first_session_to_buy(request.user)
+                obj_price = price
+                first_session_id = session.id
             except TypeError:
-                return HttpResponseServerError()
-            obj_price = price
-            first_session_id = session.id
+                if obj_is_paid:
+                    first_session_id = None
+                    obj_price = 0
+                else:
+                    return HttpResponseServerError()
         else:
             obj_price = obj.get_price_list(request.user)['whole_price']
+
+    if obj_is_paid and len(upsales) == len(paid_upsales):
+        return HttpResponseRedirect(reverse('frontpage'))
+
     total_price = 0 if obj_is_paid else obj_price
     total_price += sum([i.get_payment_price() for i in upsales if i not in paid_upsales])
 
     if request.method == 'POST' and request.is_ajax():
         # действительно создаем платеж только перед отправкой
-        payment_for_user(request.user, verified_enrollment, upsales, total_price,
+        payment_for_user(request.user, verified_enrollment, set(upsales) - set(paid_upsales), total_price,
                          only_first_course=only_first_course, first_session_id=first_session_id)
         return JsonResponse({'status': 0})
 
-    payment = payment_for_user(request.user, verified_enrollment, upsales, total_price, create=False,
+    payment = payment_for_user(request.user, verified_enrollment, set(upsales) - set(paid_upsales), total_price, create=False,
                                only_first_course=only_first_course, first_session_id=first_session_id)
     host_url = get_host_url(request)
     payment_fail = host_url + reverse('op_payment_status', kwargs={

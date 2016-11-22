@@ -143,8 +143,8 @@ def _payment_for_session_complete(payment, metadata, user, new_mode, upsale_link
                 session_enrollment_type__mode='verified'
             ).exists()
             reason = EnrollmentReason.objects.create(**params)
-            reason.send_confirmation_email(upsales=upsales, promocodes=promocodes, paid_for_session=paid_for_session)
             Participant.objects.filter(id=participant.id).update(sent_to_edx=timezone.now())
+            reason.send_confirmation_email(upsales=upsales, promocodes=promocodes, paid_for_session=paid_for_session)
         except EDXEnrollmentError as e:
             logging.error('Failed to push verified enrollment %s to edx for user %s: %s' % (
                 session, user, e
